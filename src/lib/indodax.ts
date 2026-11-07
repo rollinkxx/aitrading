@@ -5,7 +5,7 @@ export type Depth = { buy: [number, number][]; sell: [number, number][] }
 const BASE = 'https://indodax.com'
 const json = async <T>(path: string): Promise<T> => { const r = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; AITrading/1.0)', Referer: 'https://indodax.com/' } }); if (!r.ok) throw new Error(`Indodax ${r.status}`); return r.json() }
 export async function getPairs(): Promise<Pair[]> { const raw = await json<any[]>('/api/pairs'); return raw.filter(p => p.id.endsWith('idr')).map(p => ({ ...p, symbol: p.symbol || p.id.toUpperCase(), description: p.description || p.symbol })) }
-export async function getSummaries(): Promise<Record<string, any>> { const raw = await json<{tickers: Record<string, any>}>('/api/summaries'); return raw.tickers }
+export async function getSummaries(): Promise<Record<string, any>> { const raw = await json<{tickers: Record<string, any>}>('/api/summaries'); return Object.fromEntries(Object.entries(raw.tickers).map(([key, value]) => [key.replace('_', ''), value])) }
 export function parseTicker(raw: any): Ticker { return { last: Number(raw.last), buy: Number(raw.buy), sell: Number(raw.sell), high: Number(raw.high), low: Number(raw.low), volume: Number(raw.vol_idr || 0), sourceTime: Number(raw.server_time) * 1000 } }
 export async function getTicker(pair: string): Promise<Ticker> { const raw = await json<{ticker: any}>(`/api/ticker/${pair}`); return parseTicker(raw.ticker) }
 export async function getDepth(pair: string): Promise<Depth> { const raw = await json<any>(`/api/depth/${pair}`); return { buy: raw.buy.slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]), sell: raw.sell.slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]) } }
