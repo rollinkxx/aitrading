@@ -2,10 +2,17 @@ export type Pair = { id: string; symbol: string; description: string; traded_cur
 export type Ticker = { last: number; buy: number; sell: number; high: number; low: number; volume: number; sourceTime: number }
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number }
 export type Depth = { buy: [number, number][]; sell: [number, number][] }
+export type StoredMarket = { id:string; symbol:string; base_asset:string; quote_asset:string; status:string; last_synced_at:string|null }
+export type StoredTick = { market_id:string; last_price:number; best_bid:number; best_ask:number; volume_24h:number|null; high_24h:number|null; low_24h:number|null; source_timestamp:string; received_at:string; data_status:string }
+export type StoredSignal = { id:string; market_id:string; signal_type:'BUY'|'SELL'|'HOLD'|'WAIT'; timeframe:string; confidence:number; reference_price:number|null; entry_low:number|null; entry_high:number|null; stop_loss:number|null; take_profit:number|null; risk_reward:number|null; reason_text:string; data_quality:string; created_at:string; expires_at:string|null; status:string }
+export type CollectorRun = { started_at:string; finished_at:string|null; status:string; markets_count:number; ticks_count:number; candles_count:number; signals_count:number; outcomes_count:number; error_message:string|null }
+export type StoredSnapshot = { markets:StoredMarket[]; ticks:StoredTick[]; signals:StoredSignal[]; latestRun:CollectorRun|null; servedAt:string }
 const BASE = 'https://hlxiyprvygakfwreynvn.supabase.co/functions/v1/indodax-proxy'
+const COLLECTOR = 'https://hlxiyprvygakfwreynvn.supabase.co/functions/v1/market-collector'
 const json = async <T>(path: string): Promise<T> => { const r = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json' } }); if (!r.ok) throw new Error(`Indodax ${r.status}`); return r.json() }
 export async function getPairs(): Promise<Pair[]> { const raw = await json<any[]>('/api/pairs'); return raw.filter(p => p.id.endsWith('idr')).map(p => ({ ...p, symbol: p.symbol || p.id.toUpperCase(), description: p.description || p.symbol })) }
 export async function getSummaries(): Promise<Record<string, any>> { const raw = await json<{tickers: Record<string, any>}>('/api/summaries'); return Object.fromEntries(Object.entries(raw.tickers).map(([key, value]) => [key.replace('_', ''), value])) }
+export async function getStoredSnapshot(): Promise<StoredSnapshot> { const response = await fetch(COLLECTOR, { headers:{ Accept:'application/json' }, cache:'no-store' }); if(!response.ok) throw new Error(`Market snapshot ${response.status}`); return response.json() }
 export function parseTicker(raw: any): Ticker { return { last: Number(raw.last), buy: Number(raw.buy), sell: Number(raw.sell), high: Number(raw.high), low: Number(raw.low), volume: Number(raw.vol_idr || 0), sourceTime: Number(raw.server_time) * 1000 } }
 export async function getTicker(pair: string): Promise<Ticker> { const raw = await json<{ticker: any}>(`/api/ticker/${pair}`); return parseTicker(raw.ticker) }
 export async function getDepth(pair: string): Promise<Depth> { const raw = await json<any>(`/api/depth/${pair}`); return { buy: raw.buy.slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]), sell: raw.sell.slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]) } }
