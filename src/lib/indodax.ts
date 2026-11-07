@@ -2,8 +2,8 @@ export type Pair = { id: string; symbol: string; description: string; traded_cur
 export type Ticker = { last: number; buy: number; sell: number; high: number; low: number; volume: number; sourceTime: number }
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number }
 export type Depth = { buy: [number, number][]; sell: [number, number][] }
-const BASE = 'https://indodax.com'
-const json = async <T>(path: string): Promise<T> => { const r = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; AITrading/1.0)', Referer: 'https://indodax.com/' } }); if (!r.ok) throw new Error(`Indodax ${r.status}`); return r.json() }
+const BASE = 'https://hlxiyprvygakfwreynvn.supabase.co/functions/v1/indodax-proxy'
+const json = async <T>(path: string): Promise<T> => { const r = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json' } }); if (!r.ok) throw new Error(`Indodax ${r.status}`); return r.json() }
 export async function getPairs(): Promise<Pair[]> { const raw = await json<any[]>('/api/pairs'); return raw.filter(p => p.id.endsWith('idr')).map(p => ({ ...p, symbol: p.symbol || p.id.toUpperCase(), description: p.description || p.symbol })) }
 export async function getSummaries(): Promise<Record<string, any>> { const raw = await json<{tickers: Record<string, any>}>('/api/summaries'); return Object.fromEntries(Object.entries(raw.tickers).map(([key, value]) => [key.replace('_', ''), value])) }
 export function parseTicker(raw: any): Ticker { return { last: Number(raw.last), buy: Number(raw.buy), sell: Number(raw.sell), high: Number(raw.high), low: Number(raw.low), volume: Number(raw.vol_idr || 0), sourceTime: Number(raw.server_time) * 1000 } }
