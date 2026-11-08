@@ -19,7 +19,7 @@ Bukti operasional produksi: Supabase project berstatus `ACTIVE_HEALTHY`; ledger 
 - **Akar masalah:** repository tidak memuat file `20261107090437_background_collector.sql`; migration sesudahnya memakai `collector_runs`.
 - **Dampak:** setup database kosong dari SQL repository gagal pada index `collector_runs_started`, dan kelengkapan schema tidak dapat direproduksi dari Git.
 - **Tindakan:** migration historis dipulihkan/re-konstruksi pada versi yang tercatat, dengan primary key UUID, unique non-null `run_key`, waktu/status/counter, kolom diagnostik, RLS, serta akses hanya untuk `service_role`. Regression test memastikan definisi ada sebelum migration index dan error detail tidak dibuka ke role publik.
-- **Status:** source sudah tersedia di branch kerja dan harus masuk rilis Git. **Replay seluruh migration terhadap PostgreSQL kosong belum dijalankan**, sehingga parser/runtime migration penuh tetap menjadi gap verifikasi.
+- **Status:** source sudah dikomit dan dipush ke `main` pada commit `a532ff9`. **Replay seluruh migration terhadap PostgreSQL kosong belum dijalankan**, sehingga parser/runtime migration penuh tetap menjadi gap verifikasi.
 
 ### P2 — hasil sinkronisasi directory dapat tertimpa respons usang
 
@@ -72,4 +72,4 @@ Search field kini memiliki `aria-label`; tombol navigasi halaman aktif mengumumk
 
 ## Batas audit
 
-Tidak dilakukan migrasi data produksi, perubahan schedule/secret, ataupun aktivasi order. Audit production menginspeksi metadata dan data operasional agregat seperlunya; tidak membaca nilai secret. Tidak dilakukan audit formal semua dependency/transitive attack surface selain `npm audit`, penetration test, atau penilaian finansial/backtest. Perubahan UI dan library yang telah diuji baru setara klaim release setelah commit dan Worker production menyajikan bundle baru.
+Tidak dilakukan migrasi data produksi, perubahan schedule/secret, ataupun aktivasi order. Audit production menginspeksi metadata dan data operasional agregat seperlunya; tidak membaca nilai secret. Tidak dilakukan audit formal semua dependency/transitive attack surface selain `npm audit`, penetration test, atau penilaian finansial/backtest. Source telah committed/pushed; bundle frontend Worker serta perubahan proxy dan collector Edge Function telah dipublikasikan dan diuji sesuai versi pada bagian verifikasi.
