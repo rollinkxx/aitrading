@@ -66,7 +66,10 @@ function rsi(values: number[], period = 14) {
   for (let i = 1; i <= period; i++) { const d = values[i] - values[i - 1]; gain += Math.max(d, 0); loss += Math.max(-d, 0); }
   let ag = gain / period, al = loss / period;
   for (let i = period + 1; i < values.length; i++) { const d = values[i] - values[i - 1]; ag = (ag * (period - 1) + Math.max(d, 0)) / period; al = (al * (period - 1) + Math.max(-d, 0)) / period; }
-  return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  if (ag === 0 && al === 0) return 50;
+  if (al === 0) return 100;
+  if (ag === 0) return 0;
+  return 100 - 100 / (1 + ag / al);
 }
 function atr(candles: Candle[], period = 14) {
   if (candles.length < period + 1) return 0;

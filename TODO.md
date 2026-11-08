@@ -13,3 +13,12 @@
 - [x] Post-timeout-fix scheduled run completed at 11:45 UTC: 438 markets/ticks, 1,920 candle upserts, and 8 signals persisted; the dashboard snapshot refreshed successfully.
 - [x] Production app released: commit `42e27f5` is on private GitHub `main`; Cloudflare Worker `aitrading-app` deployed the build at 12:02 UTC with 100% traffic.
 - [x] Local responsive preview checked at 390×844 and 320×800; production index and hashed JS/CSS return HTTP 200, and headless Chromium renders a live Indodax price plus the completed collector status.
+- [x] Forensic audit completed across UI, market-data adapter, signal strategy, Supabase functions, migrations/RLS, Worker configuration, and tests; see `artifacts/audit-forensik-2026-11-09.md`.
+- [x] Reconstructed missing historical `20261107090437_background_collector.sql` from production schema and call sites; migration source now defines the run ledger, RLS, and service-role-only access.
+- [x] Hardened local storage fallback/validation, directory response ordering, market-data timeout/retry/depth validation, proxy streaming byte limit, heuristic-score wording, and neutral RSI for flat prices.
+- [x] Regression suite now passes 39/39; typecheck, production build, Wrangler dry-run, local browser navigation/search smoke test, and npm audits pass.
+- [ ] Add atomic retry/reclaim for failed or stale collector runs and test concurrent claims.
+- [ ] Add migration replay against a clean PostgreSQL database and integration coverage for collector auth, failures, and browser refresh races.
+- [ ] Replace hardcoded Supabase function URLs in portable cron setup; make cron migrations guarantee exactly one job per name.
+- [ ] Add snapshot pagination before market/signal count approaches the current 1,000/500-row limits.
+- [ ] Add candle-range outcome evaluation or keep all outcome reporting explicitly labeled as snapshot-sampled; calibrate heuristic scores out-of-sample before any probability/accuracy claims.

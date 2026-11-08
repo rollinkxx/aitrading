@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildSignal } from '../src/lib/strategy.ts'
+import { buildSignal, rsi } from '../src/lib/strategy.ts'
 
 function candles(direction, count = 220, interval = 900_000, now = Date.now()) {
   const latestClosedOpen = Math.floor(now / interval) * interval - interval
@@ -33,6 +33,12 @@ const depth = {
 function ticker(last, sourceTime = Date.now()) {
   return { last, buy: last - 0.1, sell: last + 0.1, high: last + 10, low: last - 10, volume: 1_000, sourceTime }
 }
+
+test('RSI treats a flat market as neutral while preserving rising/falling extremes', () => {
+  assert.equal(rsi(Array(30).fill(100)), 50)
+  assert.equal(rsi(Array.from({ length: 30 }, (_, i) => 100 + i)), 100)
+  assert.equal(rsi(Array.from({ length: 30 }, (_, i) => 130 - i)), 0)
+})
 
  test('stale ticker timestamps fail closed to WAIT', () => {
   const frames = history('up')

@@ -34,7 +34,10 @@ export function rsi(values:number[],period=14){
   for(let i=1;i<=period;i++){const change=values[i]-values[i-1];gain+=Math.max(change,0);loss+=Math.max(-change,0)}
   let avgGain=gain/period,avgLoss=loss/period
   for(let i=period+1;i<values.length;i++){const change=values[i]-values[i-1];avgGain=(avgGain*(period-1)+Math.max(change,0))/period;avgLoss=(avgLoss*(period-1)+Math.max(-change,0))/period}
-  return avgLoss===0?100:100-100/(1+avgGain/avgLoss)
+  if(avgGain===0&&avgLoss===0)return 50
+  if(avgLoss===0)return 100
+  if(avgGain===0)return 0
+  return 100-100/(1+avgGain/avgLoss)
 }
 
 export function atr(candles:Candle[],period=14){

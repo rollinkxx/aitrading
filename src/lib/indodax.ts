@@ -10,10 +10,33 @@ export type StoredSnapshot = { markets:StoredMarket[]; ticks:StoredTick[]; signa
 
 const BASE = 'https://hlxiyprvygakfwreynvn.supabase.co/functions/v1/indodax-proxy'
 const COLLECTOR = 'https://hlxiyprvygakfwreynvn.supabase.co/functions/v1/market-collector'
+const REQUEST_TIMEOUT_MS = 12_000
+async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      if (!response.ok) {
+        if (attempt === 0 && (response.status === 429 || response.status >= 500)) continue
+        throw new Error(`Market data ${response.status}`)
+      }
+      return await response.json() as T
+    } catch (error) {
+      lastError = error
+      if (error instanceof Error && /^Market data \d+$/.test(error.message)) throw error
+      if (attempt === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200))
+        continue
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Market data request failed')
+}
 const json = async <T>(path: string): Promise<T> => {
-  const response = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json' } })
-  if (!response.ok) throw new Error(`Indodax ${response.status}`)
-  return response.json()
+  return fetchJson<T>(`${BASE}${path}`, { headers: { Accept: 'application/json' } })
 }
 
 function numericField(raw: Record<string, unknown>, field: string, allowZero = false): number {
@@ -43,9 +66,7 @@ export async function getSummaries(): Promise<Record<string, any>> {
 }
 
 export async function getStoredSnapshot(): Promise<StoredSnapshot> {
-  const response = await fetch(COLLECTOR, { headers: { Accept: 'application/json' }, cache: 'no-store' })
-  if (!response.ok) throw new Error(`Market snapshot ${response.status}`)
-  return response.json()
+  return fetchJson<StoredSnapshot>(COLLECTOR, { headers: { Accept: 'application/json' }, cache: 'no-store' })
 }
 
 export function parseTicker(raw: any): Ticker {
@@ -78,15 +99,19 @@ export async function getDepth(pair: string): Promise<Depth> {
   const raw = await json<any>(`/api/depth/${encodeURIComponent(pair)}`)
   const normalize = (levels: any): [number, number][] => {
     if (!Array.isArray(levels)) return []
-    return levels.slice(0, 30).map((level: any[]) => [Number(level[0]), Number(level[1])])
+    return levels
+      .filter((level: any) => Array.isArray(level) && level.length >= 2)
+      .map((level: any[]) => [Number(level[0]), Number(level[1])] as [number, number])
+      .filter(([price, size]) => Number.isFinite(price) && price > 0 && Number.isFinite(size) && size > 0)
+      .slice(0, 30)
   }
   return { buy: normalize(raw.buy), sell: normalize(raw.sell) }
 }
 
 export async function getCandles(pair: string, tf: string, bars = 260): Promise<Candle[]> {
-  const intervalMs = tf === '1D' ? 86_400_000 : Number(tf) * 60_000
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new Error(`Invalid candle timeframe: ${tf}`)
-  if (!Number.isInteger(bars) || bars <= 0) throw new Error(`Invalid candle limit: ${bars}`)
+  if (!['15', '60', '240'].includes(tf)) throw new Error(`Invalid candle timeframe: ${tf}`)
+  const intervalMs = Number(tf) * 60_000
+  if (!Number.isInteger(bars) || bars <= 0 || bars > 300) throw new Error(`Invalid candle limit: ${bars}`)
   const to = Math.floor(Date.now() / 1000)
   const from = to - (intervalMs / 1000) * bars
   const query = new URLSearchParams({ from: String(from), to: String(to), symbol: pair, tf })

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { indodaxTarget } from "./policy.ts";
+import { readBoundedBody } from "./body-limit.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -32,9 +33,18 @@ Deno.serve(async (req: Request) => {
       return json({ error: "market-data provider returned an invalid response" }, 502);
     }
 
-    const body = await upstream.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BYTES) {
+    const declaredLength = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
       return json({ error: "market-data response exceeded the allowed size" }, 502);
+    }
+    let body: string;
+    try {
+      body = await readBoundedBody(upstream.body, MAX_RESPONSE_BYTES);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return json({ error: "market-data response exceeded the allowed size" }, 502);
+      }
+      throw error;
     }
     try { JSON.parse(body); }
     catch {

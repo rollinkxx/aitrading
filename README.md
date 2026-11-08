@@ -18,6 +18,8 @@ Supabase Edge Function `market-collector` is called by the full `pg_cron` job ev
 
 Outcome recording uses observed ticker prices, so short-lived price crossings between one-minute samples may still be missed. Background signals cover the top eight markets by IDR volume; the open dashboard can analyze a selected market live. Browser alerts are opt-in and only run while the page is open; no push notifications or automatic order placement are enabled.
 
+The displayed 0–100 signal score is a **heuristic ranking**, not a calibrated probability of profit or a claim of strategy accuracy. Stored stop/target outcomes are snapshot-sampled from observed ticker prices; they are not a full intrabar execution simulation and do not include fees or slippage.
+
 When configuring another environment, apply the migrations under `supabase/migrations`, create a high-entropy secret named `collector_shared_secret` in Vault, then configure the five-minute full-collector job and one-minute signal-checker job to send the Vault value as `x-collector-secret`. Never commit the secret value.
 
 ## Official data sources
