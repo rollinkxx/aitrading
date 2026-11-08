@@ -18,6 +18,7 @@ type Candle = { time: number; open: number; high: number; low: number; close: nu
 type Depth = { buy: [number, number][]; sell: [number, number][] };
 type Ticker = { last: number; buy: number; sell: number; high: number; low: number; volume: number; sourceTime: number };
 type Signal = { type: "BUY" | "SELL" | "HOLD" | "WAIT"; confidence: number; entryLow: number; entryHigh: number; stopLoss: number; takeProfit: number; riskReward: number; reasons: string[]; quality: "validated" | "stale" | "insufficient"; trend: "Bullish" | "Bearish" | "Neutral"; metrics: { rsi: number; atr: number; ema20: number; ema50: number; macd: number; volumeRatio: number; spread: number } };
+import { closedCandles, historyIssue } from "../_shared/candle-history.ts";
 
 const baseUrl = Deno.env.get("SUPABASE_URL")!;
 const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}")?.default;
@@ -80,7 +81,10 @@ function liquidity(depth: Depth, ticker: Ticker) {
 }
 function buildSignal(c15: Candle[], c60: Candle[], c240: Candle[], ticker: Ticker, depth: Depth): Signal {
   const metrics = { rsi: 50, atr: 0, ema20: 0, ema50: 0, macd: 0, volumeRatio: 0, spread: 0 };
-  if ([c15, c60, c240].some(c => c.length < 60) || !ticker.last || !depth.buy.length || !depth.sell.length) {
+  const now = Date.now();
+  const historyProblem = historyIssue(c15, "15", 60, now) || historyIssue(c60, "60", 200, now) || historyIssue(c240, "240", 150, now);
+  if (historyProblem) return { type: "WAIT", confidence: 0, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: [historyProblem.reason], quality: historyProblem.quality, trend: "Neutral", metrics };
+  if (!ticker.last || !depth.buy.length || !depth.sell.length) {
     return { type: "WAIT", confidence: 0, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: ["Data OHLC atau order book belum cukup untuk konfirmasi multi-timeframe."], quality: "insufficient", trend: "Neutral", metrics };
   }
   const v15 = c15.map(x => x.close), v60 = c60.map(x => x.close), v240 = c240.map(x => x.close);
@@ -89,7 +93,7 @@ function buildSignal(c15: Candle[], c60: Candle[], c240: Candle[], ticker: Ticke
   const priorVolume = c15.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / 20 || 1;
   const volumeRatio = c15.at(-1)!.volume / priorVolume;
   const book = liquidity(depth, ticker);
-  const bull = (e60 > ema(v60, 200) || v60.length < 200) && e240 > ema(v240, 150);
+  const bull = e60 > ema(v60, 200) && e240 > ema(v240, 150);
   const bear = e60 < ema(v60, 200) && e240 < ema(v240, 150);
   let score = 50;
   const reasons: string[] = [];
@@ -131,9 +135,9 @@ async function authenticate(req: Request) {
 async function latestSnapshot() {
   const [markets, ticks, signals, runs] = await Promise.all([
     db(`markets?select=id,symbol,base_asset,quote_asset,status,last_synced_at&order=symbol.asc&limit=${PAGE_SIZE}`),
-    db(`market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=received_at.desc&limit=${PAGE_SIZE}`),
+    db(`latest_market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=market_id.asc&limit=${PAGE_SIZE}`),
     db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&order=created_at.desc&limit=100`),
-    db("collector_runs?select=started_at,finished_at,status,markets_count,ticks_count,candles_count,signals_count,outcomes_count,error_message&order=started_at.desc&limit=1"),
+    db("collector_runs?select=started_at,finished_at,status,markets_count,ticks_count,candles_count,signals_count,outcomes_count&order=started_at.desc&limit=1"),
   ]);
   return { markets, ticks, signals, latestRun: runs?.[0] || null, servedAt: new Date().toISOString() };
 }
@@ -160,7 +164,7 @@ function toCandles(raw: any, tf: string): Candle[] {
   const candles = Array.isArray(raw) ? raw.map((x: any) => ({
     time: Number(x.Time) * 1000, open: Number(x.Open), high: Number(x.High), low: Number(x.Low), close: Number(x.Close), volume: Number(x.Volume || 0),
   })) : [];
-  return candles.filter((x: Candle) => Number.isFinite(x.time) && [x.open, x.high, x.low, x.close, x.volume].every(Number.isFinite) && x.low <= Math.min(x.open, x.close) && x.high >= Math.max(x.open, x.close)).sort((a: Candle, b: Candle) => a.time - b.time).slice(-CANDLE_HISTORY);
+  return candles.filter((x: Candle) => Number.isFinite(x.time) && [x.open, x.high, x.low, x.close, x.volume].every(Number.isFinite) && x.open > 0 && x.high > 0 && x.low > 0 && x.close > 0 && x.volume >= 0 && x.low <= Math.min(x.open, x.close) && x.high >= Math.max(x.open, x.close)).sort((a: Candle, b: Candle) => a.time - b.time).slice(-CANDLE_HISTORY);
 }
 async function collect() {
   const now = Date.now();
@@ -217,16 +221,18 @@ async function collect() {
       const normDepth = (raw: any): Depth => ({ buy: (raw.buy || []).slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]), sell: (raw.sell || []).slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]) });
       const depth = normDepth(depthRaw);
       const c15 = toCandles(raw15, "15"), c60 = toCandles(raw60, "60"), c240 = toCandles(raw240, "240");
-      const result = buildSignal(c15, c60, c240, ticker, depth);
+      const closed15 = closedCandles(c15, "15", now), closed60 = closedCandles(c60, "60", now), closed240 = closedCandles(c240, "240", now);
+      const result = buildSignal(closed15, closed60, closed240, ticker, depth);
       for (const [timeframe, bars] of [["15", c15], ["60", c60], ["240", c240]] as [string, Candle[]][]) {
         for (const candle of bars.slice(-CANDLE_RETENTION)) {
           const openTime = new Date(candle.time).toISOString();
           const interval = Number(timeframe) * 60_000;
           candleRows.push({ market_id: market.id, timeframe, open_time: openTime, close_time: new Date(candle.time + interval).toISOString(), open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume, is_closed: candle.time + interval <= now, source: "indodax-official" });
         }
-        const closes = bars.map(x => x.close);
-        const latest = bars.at(-1);
-        if (latest) indicatorRows.push({ market_id: market.id, timeframe, candle_time: new Date(latest.time).toISOString(), ema_20: ema(closes, 20), ema_50: ema(closes, 50), ema_200: ema(closes, 200), rsi: rsi(closes), macd: ema(closes, 12) - ema(closes, 26), macd_signal: ema(closes.map((_, i) => { const prefix = closes.slice(0, i + 1); return ema(prefix, 12) - ema(prefix, 26); }), 9), atr: atr(bars), volume_ratio: latest.volume / (bars.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / Math.max(1, Math.min(20, bars.length - 1)) || 1) });
+        const closed = closedCandles(bars, timeframe, now);
+        const closes = closed.map(x => x.close);
+        const latest = closed[closed.length - 1];
+        if (latest) indicatorRows.push({ market_id: market.id, timeframe, candle_time: new Date(latest.time).toISOString(), ema_20: ema(closes, 20), ema_50: ema(closes, 50), ema_200: ema(closes, 200), rsi: rsi(closes), macd: ema(closes, 12) - ema(closes, 26), macd_signal: ema(closes.map((_, i) => { const prefix = closes.slice(0, i + 1); return ema(prefix, 12) - ema(prefix, 26); }), 9), atr: atr(closed), volume_ratio: latest.volume / (closed.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / Math.max(1, Math.min(20, closed.length - 1)) || 1) });
       }
       const bucket = Math.floor(now / (15 * 60_000));
       signalRows.push({ market_id: market.id, signal_type: result.type, timeframe: "15m/1h/4h", confidence: result.confidence, reference_price: ticker.last, entry_low: result.entryLow || null, entry_high: result.entryHigh || null, stop_loss: result.stopLoss || null, take_profit: result.takeProfit || null, risk_reward: result.riskReward || null, reason_codes: result.reasons.map((_, i) => `R${i + 1}`), reason_text: result.reasons.join(" "), data_quality: result.quality, expires_at: new Date(now + 15 * 60_000).toISOString(), status: result.type === "WAIT" || result.type === "HOLD" ? "informational" : "active", dedupe_key: `${market.id}:15m:${result.type}:${bucket}` });
@@ -276,7 +282,7 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (req.method === "GET") {
     try { return json(await latestSnapshot()); }
-    catch (error) { return json({ error: "snapshot unavailable", detail: String(error) }, 503); }
+    catch (error) { console.error(JSON.stringify({ event: "snapshot_unavailable", detail: String(error).slice(0, 300) })); return json({ error: "snapshot unavailable" }, 503); }
   }
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   try {
