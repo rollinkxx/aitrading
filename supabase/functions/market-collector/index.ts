@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { persistSignalOutcomes } from "../_shared/signal-outcomes.ts";
+import { fetchAllPages } from "../_shared/pagination.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -8,7 +9,6 @@ const cors = {
   "Content-Type": "application/json; charset=utf-8",
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: cors });
-const PAGE_SIZE = 1000;
 const RUN_WINDOW_MS = 5 * 60_000;
 const MAX_SIGNAL_MARKETS = 8;
 const CANDLE_HISTORY = 220;
@@ -137,9 +137,9 @@ async function authenticate(req: Request) {
 }
 async function latestSnapshot() {
   const [markets, ticks, signals, runs] = await Promise.all([
-    db(`markets?select=id,symbol,base_asset,quote_asset,status,last_synced_at&order=symbol.asc&limit=${PAGE_SIZE}`),
-    db(`latest_market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=market_id.asc&limit=${PAGE_SIZE}`),
-    db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&order=created_at.desc&limit=100`),
+    fetchAllPages((offset, limit) => db(`markets?select=id,symbol,base_asset,quote_asset,status,last_synced_at&order=symbol.asc&limit=${limit}&offset=${offset}`)),
+    fetchAllPages((offset, limit) => db(`latest_market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=market_id.asc&limit=${limit}&offset=${offset}`)),
+    fetchAllPages((offset, limit) => db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&order=created_at.desc&limit=${limit}&offset=${offset}`), 500, 10),
     db("collector_runs?select=started_at,finished_at,status,markets_count,ticks_count,candles_count,signals_count,outcomes_count&order=started_at.desc&limit=1"),
   ]);
   return { markets, ticks, signals, latestRun: runs?.[0] || null, servedAt: new Date().toISOString() };
@@ -172,11 +172,10 @@ function toCandles(raw: any, tf: string): Candle[] {
 async function collect() {
   const now = Date.now();
   const runKey = String(Math.floor(now / RUN_WINDOW_MS));
-  const claim = await db("collector_runs?on_conflict=run_key", {
-    method: "POST", body: JSON.stringify([{ run_key: runKey, status: "running" }]),
-    headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
-  });
-  if (!Array.isArray(claim) || claim.length === 0) return { skipped: true, reason: "this five-minute run window was already claimed", runKey };
+  const claim = await db("rpc/claim_collector_run", { method: "POST", body: JSON.stringify({ p_run_key: runKey, p_lease_seconds: 90 }) });
+  const lease = Array.isArray(claim) ? claim[0] : claim;
+  if (!lease?.claimed || !lease.run_id || !lease.fencing_token) return { skipped: true, reason: "this five-minute run window is already owned", runKey };
+  const runFilter = `id=eq.${encodeURIComponent(lease.run_id)}&fencing_token=eq.${encodeURIComponent(lease.fencing_token)}&status=eq.running`;
   let marketsCount = 0, ticksCount = 0, candlesCount = 0, signalsCount = 0, outcomesCount = 0;
   try {
     const [pairsResponse, summariesResponse] = await Promise.all([official("/api/pairs"), official("/api/summaries")]);
@@ -261,7 +260,7 @@ async function collect() {
       const targetHit = s.signal_type === "BUY" ? price >= Number(s.take_profit) : price <= Number(s.take_profit);
       if (!stopHit && !targetHit) continue;
       const outcome = stopHit ? "stop_loss" : "take_profit";
-      outcomeRows.push({ signal_id: s.id, exit_price: price, return_percentage: ((price - Number(s.reference_price || price)) / Number(s.reference_price || price)) * 100 * (s.signal_type === "SELL" ? -1 : 1), outcome, closed_at: new Date(now).toISOString() });
+      outcomeRows.push({ signal_id: s.id, exit_price: price, return_percentage: ((price - Number(s.reference_price || price)) / Number(s.reference_price || price)) * 100 * (s.signal_type === "SELL" ? -1 : 1), outcome, closed_at: new Date(now).toISOString(), evaluation_method: "snapshot_sampled" });
     }
     outcomesCount = await persistSignalOutcomes(
       outcomeRows,
@@ -272,10 +271,10 @@ async function collect() {
         headers: { Prefer: "return=minimal" },
       }),
     );
-    await db(`collector_runs?run_key=eq.${encodeURIComponent(runKey)}`, { method: "PATCH", body: JSON.stringify({ finished_at: new Date().toISOString(), status: "completed", markets_count: marketsCount, ticks_count: ticksCount, candles_count: candlesCount, signals_count: signalsCount, outcomes_count: outcomesCount }), headers: { Prefer: "return=minimal" } });
+    await db(`collector_runs?${runFilter}`, { method: "PATCH", body: JSON.stringify({ finished_at: new Date().toISOString(), status: "completed", markets_count: marketsCount, ticks_count: ticksCount, candles_count: candlesCount, signals_count: signalsCount, outcomes_count: outcomesCount }), headers: { Prefer: "return=minimal" } });
     return { ok: true, runKey, marketsCount, ticksCount, candlesCount, signalsCount, outcomesCount };
   } catch (error) {
-    await db(`collector_runs?run_key=eq.${encodeURIComponent(runKey)}`, { method: "PATCH", body: JSON.stringify({ finished_at: new Date().toISOString(), status: "failed", markets_count: marketsCount, ticks_count: ticksCount, candles_count: candlesCount, signals_count: signalsCount, outcomes_count: outcomesCount, error_message: String(error).slice(0, 1000) }), headers: { Prefer: "return=minimal" } }).catch(() => null);
+    await db(`collector_runs?${runFilter}`, { method: "PATCH", body: JSON.stringify({ finished_at: new Date().toISOString(), status: "failed", markets_count: marketsCount, ticks_count: ticksCount, candles_count: candlesCount, signals_count: signalsCount, outcomes_count: outcomesCount, error_message: String(error).slice(0, 1000) }), headers: { Prefer: "return=minimal" } }).catch(() => null);
     throw error;
   }
 }

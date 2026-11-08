@@ -17,8 +17,8 @@
 - [x] Reconstructed missing historical `20261107090437_background_collector.sql` from production schema and call sites; migration source now defines the run ledger, RLS, and service-role-only access.
 - [x] Hardened local storage fallback/validation, directory response ordering, market-data timeout/retry/depth validation, proxy streaming byte limit, heuristic-score wording, and neutral RSI for flat prices.
 - [x] Regression suite now passes 39/39; typecheck, production build, Wrangler dry-run, local browser navigation/search smoke test, and npm audits pass.
-- [ ] Add atomic retry/reclaim for failed or stale collector runs and test concurrent claims.
-- [ ] Add migration replay against a clean PostgreSQL database and integration coverage for collector auth, failures, and browser refresh races.
-- [ ] Replace hardcoded Supabase function URLs in portable cron setup; make cron migrations guarantee exactly one job per name.
-- [ ] Add snapshot pagination before market/signal count approaches the current 1,000/500-row limits.
-- [ ] Add candle-range outcome evaluation or keep all outcome reporting explicitly labeled as snapshot-sampled; calibrate heuristic scores out-of-sample before any probability/accuracy claims.
+- [x] Add atomic retry/reclaim for failed or stale collector runs with a database lease, heartbeat timestamp, fencing token, guarded completion, and concurrent-claim regression coverage.
+- [ ] Add migration replay against a clean PostgreSQL database and integration coverage for collector auth, failures, and browser refresh races. The sandbox has no PostgreSQL/Docker/Supabase CLI; production DDL and live auth/cron smoke checks are verified, but a disposable clean database replay remains open.
+- [x] Replace hardcoded Supabase function URLs in portable cron setup; migration fails closed without a runtime URL/Vault value and production has exactly one active job per name.
+- [x] Add bounded snapshot pagination before market/signal count approaches the previous 1,000/500-row limits; the endpoint now fails closed above its configured maximum instead of silently truncating.
+- [x] Keep outcome reporting explicitly labeled as `snapshot_sampled`; candle-range evaluation and out-of-sample calibration remain intentionally open before any probability/accuracy claims.

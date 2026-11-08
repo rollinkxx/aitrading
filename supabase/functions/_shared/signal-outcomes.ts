@@ -4,6 +4,7 @@ export type SignalOutcomeRow = {
   return_percentage: number;
   outcome: string;
   closed_at: string;
+  evaluation_method: "snapshot_sampled";
 };
 
 /**

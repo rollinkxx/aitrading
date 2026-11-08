@@ -81,7 +81,7 @@ async function checkActiveSignals() {
   const tickers = new Map<string, SummaryTicker>();
   for (const [key, value] of Object.entries(rawTickers)) tickers.set(normalizePair(key), value);
 
-  const outcomeRows: { signal_id: string; exit_price: number; return_percentage: number; outcome: string; closed_at: string }[] = [];
+  const outcomeRows: { signal_id: string; exit_price: number; return_percentage: number; outcome: string; closed_at: string; evaluation_method: "snapshot_sampled" }[] = [];
   let checked = 0;
   let staleOrMissing = 0;
   for (const signal of active) {
@@ -96,6 +96,7 @@ async function checkActiveSignals() {
       return_percentage: outcome.returnPercentage,
       outcome: outcome.outcome,
       closed_at: nowIso,
+      evaluation_method: "snapshot_sampled",
     });
   }
 
