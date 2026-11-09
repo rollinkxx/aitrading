@@ -42,3 +42,29 @@ test('historyIssue fails closed on duplicated bars and large time gaps', () => {
   bars[150] = { ...bars[150], time: bars[150].time + 5 * 15 * 60_000 }
   assert.equal(historyIssue(bars, '15', 60, now)?.quality, 'insufficient')
 })
+
+test('closedCandles sorts out-of-order input and excludes an open candle', () => {
+  const interval = 15 * 60_000
+  const closed = history(3, interval)
+  const openTime = Math.floor(now / interval) * interval
+  const result = closedCandles([...closed].reverse().concat(bar(openTime)), '15', now)
+  assert.deepEqual(result.map(candle => candle.time), closed.map(candle => candle.time))
+})
+
+test('historyIssue accepts a gap exactly equal to two candle intervals', () => {
+  const interval = 15 * 60_000
+  const bars = history(3, interval)
+  bars.splice(1, 1)
+  assert.equal(historyIssue(bars, '15', 2, now), null)
+})
+
+test('historyIssue rejects duplicate timestamps and invalid timeframe or minimum configuration', () => {
+  const duplicated = history(220, 15 * 60_000)
+  duplicated[1] = { ...duplicated[1], time: duplicated[0].time }
+  assert.equal(historyIssue(duplicated, '15', 60, now)?.quality, 'insufficient')
+
+  const validBars = history(3, 15 * 60_000)
+  for (const [timeframe, minimum] of [['0', 1], ['invalid', 1], ['15', 0], ['15', 1.5]]) {
+    assert.equal(historyIssue(validBars, timeframe, minimum, now)?.quality, 'insufficient')
+  }
+})
