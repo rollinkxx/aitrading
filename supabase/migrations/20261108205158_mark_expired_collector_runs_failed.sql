@@ -1,5 +1,3 @@
--- Mark abandoned expired runs as failed whenever a new claim is attempted.
--- The current run_key is excluded so an expired invocation can still be reclaimed.
 create or replace function public.claim_collector_run(
   p_run_key text,
   p_lease_seconds integer default 90

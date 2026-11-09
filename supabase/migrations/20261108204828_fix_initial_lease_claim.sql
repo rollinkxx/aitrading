@@ -1,4 +1,3 @@
--- Fix first-claim semantics for environments that already applied the initial lease migration.
 create or replace function public.claim_collector_run(
   p_run_key text,
   p_lease_seconds integer default 90
