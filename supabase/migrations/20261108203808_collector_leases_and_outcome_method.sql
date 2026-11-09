@@ -18,7 +18,6 @@ set search_path = public
 as $$
 declare
   current_run public.collector_runs%rowtype;
-  inserted_id uuid;
   next_token bigint;
 begin
   if p_run_key is null or p_run_key = '' or p_lease_seconds < 10 or p_lease_seconds > 900 then
@@ -27,14 +26,7 @@ begin
 
   insert into public.collector_runs(run_key, status, fencing_token, lease_expires_at, heartbeat_at)
   values (p_run_key, 'running', 1, now() + make_interval(secs => p_lease_seconds), now())
-  on conflict (run_key) do nothing
-  returning id into inserted_id;
-
-  if inserted_id is not null then
-    return query select inserted_id, 1::bigint, true;
-    return;
-  end if;
-
+  on conflict (run_key) do nothing;
   select * into current_run
     from public.collector_runs
    where run_key = p_run_key
