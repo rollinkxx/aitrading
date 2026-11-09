@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { persistSignalOutcomes } from "../_shared/signal-outcomes.ts";
 import { fetchAllPages } from "../_shared/pagination.ts";
+import { normalizeDepth, validTicker } from "../_shared/market-quality.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -13,6 +14,8 @@ const RUN_WINDOW_MS = 5 * 60_000;
 const MAX_SIGNAL_MARKETS = 8;
 const CANDLE_HISTORY = 220;
 const CANDLE_RETENTION = 80;
+// Leave headroom for persistence and the 30-second pg_net timeout.
+const COLLECTOR_DEADLINE_MS = 25_000;
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 type Depth = { buy: [number, number][]; sell: [number, number][] };
@@ -39,10 +42,12 @@ async function db(path: string, init: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function official(path: string) {
+async function official(path: string, deadlineAt?: number) {
+  const remaining = deadlineAt === undefined ? 15_000 : Math.min(15_000, deadlineAt - Date.now());
+  if (!Number.isFinite(remaining) || remaining <= 0) throw new Error("collector deadline exceeded");
   const response = await fetch(`https://indodax.com${path}`, {
     headers: { Accept: "application/json", "User-Agent": "AITrading/1.1 (+official-public-market-data)", Referer: "https://indodax.com/" },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(Math.max(1_000, Math.floor(remaining))),
   });
   if (!response.ok) throw new Error(`Indodax ${path} returned ${response.status}`);
   return response.json();
@@ -139,7 +144,7 @@ async function latestSnapshot() {
   const [markets, ticks, signals, runs] = await Promise.all([
     fetchAllPages((offset, limit) => db(`markets?select=id,symbol,base_asset,quote_asset,status,last_synced_at&order=symbol.asc&limit=${limit}&offset=${offset}`)),
     fetchAllPages((offset, limit) => db(`latest_market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=market_id.asc&limit=${limit}&offset=${offset}`)),
-    fetchAllPages((offset, limit) => db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&order=created_at.desc&limit=${limit}&offset=${offset}`), 500, 10),
+    db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&status=in.(active,informational)&order=created_at.desc&limit=500`),
     db("collector_runs?select=started_at,finished_at,status,markets_count,ticks_count,candles_count,signals_count,outcomes_count&order=started_at.desc&limit=1"),
   ]);
   return { markets, ticks, signals, latestRun: runs?.[0] || null, servedAt: new Date().toISOString() };
@@ -171,6 +176,7 @@ function toCandles(raw: any, tf: string): Candle[] {
 }
 async function collect() {
   const now = Date.now();
+  const deadlineAt = now + COLLECTOR_DEADLINE_MS;
   const runKey = String(Math.floor(now / RUN_WINDOW_MS));
   const claim = await db("rpc/claim_collector_run", { method: "POST", body: JSON.stringify({ p_run_key: runKey, p_lease_seconds: 90 }) });
   const lease = Array.isArray(claim) ? claim[0] : claim;
@@ -178,7 +184,7 @@ async function collect() {
   const runFilter = `id=eq.${encodeURIComponent(lease.run_id)}&fencing_token=eq.${encodeURIComponent(lease.fencing_token)}&status=eq.running`;
   let marketsCount = 0, ticksCount = 0, candlesCount = 0, signalsCount = 0, outcomesCount = 0;
   try {
-    const [pairsResponse, summariesResponse] = await Promise.all([official("/api/pairs"), official("/api/summaries")]);
+    const [pairsResponse, summariesResponse] = await Promise.all([official("/api/pairs", deadlineAt), official("/api/summaries", deadlineAt)]);
     const pairs = (Array.isArray(pairsResponse) ? pairsResponse : []).filter((p: any) => typeof p.id === "string" && p.id.toLowerCase().endsWith("idr"));
     const tickers = summariesResponse?.tickers || {};
     const byId = new Map<string, any>();
@@ -194,7 +200,8 @@ async function collect() {
       const t = byId.get(market.id);
       if (!t) continue;
       const last = validNumber(t.last), buy = validNumber(t.buy), sell = validNumber(t.sell), high = validNumber(t.high), low = validNumber(t.low), volume = validNumber(t.vol_idr ?? t.volume);
-      if (last === null || last <= 0 || buy === null || sell === null || high === null || low === null || high < low) continue;
+      if (last === null || buy === null || sell === null || high === null || low === null) continue;
+      if (!validTicker({ last, buy, sell, high, low, volume: volume ?? 0 })) continue;
       const sourceMs = Number(t.server_time) > 0 ? Number(t.server_time) * 1000 : now;
       const age = now - sourceMs;
       if (age < -60_000 || age > 180_000) continue;
@@ -215,13 +222,13 @@ async function collect() {
       const tickerRaw = byId.get(market.id);
       const ticker: Ticker = { last: Number(tickerRaw.last), buy: Number(tickerRaw.buy), sell: Number(tickerRaw.sell), high: Number(tickerRaw.high), low: Number(tickerRaw.low), volume: Number(tickerRaw.vol_idr || 0), sourceTime: Number(tickerRaw.server_time) * 1000 };
       const [depthRaw, raw15, raw60, raw240] = await Promise.all([
-        official(`/api/depth/${market.id}`),
-        official(`/tradingview/history_v2?from=${Math.floor((now - 15 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=15`),
-        official(`/tradingview/history_v2?from=${Math.floor((now - 60 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=60`),
-        official(`/tradingview/history_v2?from=${Math.floor((now - 240 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=240`),
+        official(`/api/depth/${market.id}`, deadlineAt),
+        official(`/tradingview/history_v2?from=${Math.floor((now - 15 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=15`, deadlineAt),
+        official(`/tradingview/history_v2?from=${Math.floor((now - 60 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=60`, deadlineAt),
+        official(`/tradingview/history_v2?from=${Math.floor((now - 240 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=240`, deadlineAt),
       ]);
-      const normDepth = (raw: any): Depth => ({ buy: (raw.buy || []).slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]), sell: (raw.sell || []).slice(0, 30).map((x: any[]) => [Number(x[0]), Number(x[1])]) });
-      const depth = normDepth(depthRaw);
+      const depth = normalizeDepth(depthRaw, 30);
+      if (!depth) continue;
       const c15 = toCandles(raw15, "15"), c60 = toCandles(raw60, "60"), c240 = toCandles(raw240, "240");
       const closed15 = closedCandles(c15, "15", now), closed60 = closedCandles(c60, "60", now), closed240 = closedCandles(c240, "240", now);
       const result = buildSignal(closed15, closed60, closed240, ticker, depth);
