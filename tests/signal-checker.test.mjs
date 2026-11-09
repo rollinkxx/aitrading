@@ -52,3 +52,45 @@ test("does not evaluate non-directional or malformed signals", () => {
   assert.equal(evaluateOutcome(signal({ signal_type: "HOLD" }), ticker(120), now), null);
   assert.equal(evaluateOutcome(signal({ reference_price: 0 }), ticker(120), now), null);
 });
+
+test("accepts fresh-price boundaries in seconds and milliseconds and rejects values just outside them", () => {
+  assert.equal(freshPrice({ last: "110", server_time: (now - 90_000) / 1000 }, now), 110);
+  assert.equal(freshPrice({ last: 110, server_time: now - 90_000 }, now), 110);
+  assert.equal(freshPrice({ last: 110, server_time: now + 60_000 }, now), 110);
+  assert.equal(freshPrice({ last: 110, server_time: now - 90_001 }, now), null);
+  assert.equal(freshPrice({ last: 110, server_time: (now + 60_001) / 1000 }, now), null);
+});
+
+test("rejects absent, non-finite, or non-positive ticker prices and timestamps", () => {
+  for (const invalid of [
+    null,
+    undefined,
+    {},
+    { last: 0, server_time: now },
+    { last: -1, server_time: now },
+    { last: "not-a-price", server_time: now },
+    { last: 110, server_time: 0 },
+    { last: 110, server_time: "not-a-time" },
+  ]) {
+    assert.equal(freshPrice(invalid, now), null);
+  }
+});
+
+test("rejects malformed stop, target, and reference values before outcome evaluation", () => {
+  for (const overrides of [
+    { reference_price: "not-a-price" },
+    { stop_loss: null },
+    { stop_loss: "not-a-price" },
+    { take_profit: "not-a-price" },
+  ]) {
+    assert.equal(evaluateOutcome(signal(overrides), ticker(112), now), null);
+  }
+});
+
+test("uses stop-loss precedence when a malformed signal range makes both levels true", () => {
+  assert.equal(evaluateOutcome(signal({ stop_loss: 115, take_profit: 110 }), ticker(112), now)?.outcome, "stop_loss");
+  assert.equal(
+    evaluateOutcome(signal({ signal_type: "SELL", stop_loss: 90, take_profit: 100 }), ticker(95), now)?.outcome,
+    "stop_loss",
+  );
+});

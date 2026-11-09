@@ -19,3 +19,14 @@ test("fetchAllPages rejects malformed page responses", async () => {
 test("fetchAllPages fails closed when the maximum page bound is reached", async () => {
   await assert.rejects(fetchAllPages(async () => [1], 1, 2), /exceeded 2 rows/);
 });
+
+test("fetchAllPages rejects invalid page size and page bounds before making requests", async () => {
+  let requests = 0;
+  const fetchPage = async () => { requests++; return []; };
+
+  await assert.rejects(fetchAllPages(fetchPage, 0, 2), /pageSize must be a positive integer/);
+  await assert.rejects(fetchAllPages(fetchPage, 1.5, 2), /pageSize must be a positive integer/);
+  await assert.rejects(fetchAllPages(fetchPage, 1, 0), /maxPages must be a positive integer/);
+  await assert.rejects(fetchAllPages(fetchPage, 1, 1.5), /maxPages must be a positive integer/);
+  assert.equal(requests, 0);
+});

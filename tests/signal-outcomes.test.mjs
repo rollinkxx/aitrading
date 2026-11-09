@@ -45,3 +45,14 @@ test("does not issue database writes for an empty outcome batch", async () => {
   assert.equal(count, 0);
   assert.equal(writes, 0);
 });
+
+test("ignores outcomes without a signal id and does not issue database writes", async () => {
+  let writes = 0;
+  const count = await persistSignalOutcomes(
+    [outcome(""), { ...outcome("signal-a"), signal_id: undefined }],
+    async () => { writes++; },
+    async () => { writes++; },
+  );
+  assert.equal(count, 0);
+  assert.equal(writes, 0);
+});
