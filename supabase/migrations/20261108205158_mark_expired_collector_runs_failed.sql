@@ -1,4 +1,3 @@
--- Fix first-claim semantics for environments that already applied the initial lease migration.
 create or replace function public.claim_collector_run(
   p_run_key text,
   p_lease_seconds integer default 90
@@ -16,6 +15,13 @@ begin
   if p_run_key is null or p_run_key = '' or p_lease_seconds < 10 or p_lease_seconds > 900 then
     raise exception 'invalid collector claim parameters';
   end if;
+  update public.collector_runs
+     set status = 'failed', finished_at = coalesce(finished_at, now()),
+         error_message = coalesce(error_message, 'lease expired before completion')
+   where status = 'running'
+     and lease_expires_at is not null
+     and lease_expires_at <= now()
+     and run_key <> p_run_key;
   insert into public.collector_runs(run_key, status, fencing_token, lease_expires_at, heartbeat_at)
   values (p_run_key, 'running', 1, now() + make_interval(secs => p_lease_seconds), now())
   on conflict (run_key) do nothing
