@@ -3,7 +3,7 @@
   "name": "aitrading-app",
   "main": "aitrading-app.js",
   "account_id": "61b0828673501d7247e50a5c7c2a1cc8",
-  "compatibility_date": "2026-11-07",
+  "compatibility_date": "2026-11-09",
   "workers_dev": true,
   "assets": {
     "directory": "../dist",
@@ -19,7 +19,7 @@
     },
     "traces": {
       "enabled": true,
-      "head_sampling_rate": 1
+      "head_sampling_rate": 0.01
     }
   },
   "previews": {}

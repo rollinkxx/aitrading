@@ -42,7 +42,8 @@ test("portable cron migration has no project-specific function URL", async () =>
 
 test("local migration filenames use the four applied Supabase IDs", async () => {
   const names = await readdir(migrationDir);
-  const relevant = names.filter(name => /collector_leases_and_outcome_method|portable_cron_urls|fix_initial_lease_claim|mark_expired_collector_runs_failed/.test(name)).sort();
+  const appliedIds = ["20261108203808", "20261108203842", "20261108204828", "20261108205158"];
+  const relevant = names.filter(name => appliedIds.some(id => name.startsWith(id))).sort();
   assert.deepEqual(relevant, [
     "20261108203808_collector_leases_and_outcome_method.sql",
     "20261108203842_portable_cron_urls.sql",

@@ -1,0 +1,72 @@
+name: AITrading CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aitrading-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aitrading_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aitrading_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/aitrading_test
+      AITRADING_ALLOW_DATABASE_RESET: "1"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.6.0
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm audit --omit=dev
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check Supabase Edge Function
+        run: deno check --config supabase/functions/market-collector/deno.json supabase/functions/market-collector/index.ts
+      - name: Provision Supabase role stubs for migration replay
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d aitrading_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon NOLOGIN;
+          CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE service_role NOLOGIN BYPASSRLS;
+          SQL
+      - run: npm run test:integration
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Browser smoke test
+        run: npm run test:e2e
+        env:
+          CHROMIUM_BIN: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Wrangler dry-run
+        run: npx --yes wrangler@4.158.0 deploy --dry-run --config cloudflare/wrangler.jsonc
+        env:
+          WRANGLER_SEND_METRICS: "false"
