@@ -27,3 +27,10 @@ test('batch includes all business layers and outcomes in one request', () => {
     assert.match(migration, new RegExp(field));
   }
 });
+
+test('collector applies strict market-data validation before signal generation', () => {
+  assert.match(collector, /normalizeDepth, validDepth, validTicker/);
+  assert.match(collector, /if \(!depth \|\| !validDepth\(depth\) \|\| !validTicker\(ticker\)\) continue/);
+  assert.match(collector, /x\.time <= now \+ 60_000/);
+  assert.match(collector, /toCandles\(raw15, "15", now\)/);
+});

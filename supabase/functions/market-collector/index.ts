@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js@2.119.0/edge-runtime.d.ts";
 import { fetchAllPages } from "../_shared/pagination.ts";
-import { normalizeDepth, validTicker } from "../_shared/market-quality.ts";
+import { normalizeDepth, validDepth, validTicker } from "../_shared/market-quality.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -153,11 +153,11 @@ async function latestSnapshot() {
   return { markets, ticks, signals, latestRun: runs?.[0] || null, servedAt: new Date().toISOString() };
 }
 
-function toCandles(raw: any, tf: string): Candle[] {
+function toCandles(raw: any, tf: string, now: number): Candle[] {
   const candles = Array.isArray(raw) ? raw.map((x: any) => ({
     time: Number(x.Time) * 1000, open: Number(x.Open), high: Number(x.High), low: Number(x.Low), close: Number(x.Close), volume: Number(x.Volume || 0),
   })) : [];
-  return candles.filter((x: Candle) => Number.isFinite(x.time) && [x.open, x.high, x.low, x.close, x.volume].every(Number.isFinite) && x.open > 0 && x.high > 0 && x.low > 0 && x.close > 0 && x.volume >= 0 && x.low <= Math.min(x.open, x.close) && x.high >= Math.max(x.open, x.close)).sort((a: Candle, b: Candle) => a.time - b.time).slice(-CANDLE_HISTORY);
+  return candles.filter((x: Candle) => Number.isFinite(x.time) && x.time > 0 && x.time <= now + 60_000 && [x.open, x.high, x.low, x.close, x.volume].every(Number.isFinite) && x.open > 0 && x.high > 0 && x.low > 0 && x.close > 0 && x.volume >= 0 && x.low <= Math.min(x.open, x.close) && x.high >= Math.max(x.open, x.close)).sort((a: Candle, b: Candle) => a.time - b.time).slice(-CANDLE_HISTORY);
 }
 async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
   const now = Date.now();
@@ -211,8 +211,8 @@ async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
         official(`/tradingview/history_v2?from=${Math.floor((now - 240 * 60_000 * CANDLE_HISTORY) / 1000)}&to=${Math.floor(now / 1000)}&symbol=${market.id}&tf=240`, deadlineAt),
       ]);
       const depth = normalizeDepth(depthRaw, 30);
-      if (!depth) continue;
-      const c15 = toCandles(raw15, "15"), c60 = toCandles(raw60, "60"), c240 = toCandles(raw240, "240");
+      if (!depth || !validDepth(depth) || !validTicker(ticker)) continue;
+      const c15 = toCandles(raw15, "15", now), c60 = toCandles(raw60, "60", now), c240 = toCandles(raw240, "240", now);
       const closed15 = closedCandles(c15, "15", now), closed60 = closedCandles(c60, "60", now), closed240 = closedCandles(c240, "240", now);
       const result = buildSignal(closed15, closed60, closed240, ticker, depth);
       for (const [timeframe, bars] of [["15", c15], ["60", c60], ["240", c240]] as [string, Candle[]][]) {
