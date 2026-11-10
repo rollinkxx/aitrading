@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js@2.119.0/edge-runtime.d.ts";
 import { fetchAllPages } from "../_shared/pagination.ts";
 import { normalizeDepth, validDepth, validTicker } from "../_shared/market-quality.ts";
+import { buildSignal, type Signal } from "../_shared/strategy.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -19,8 +20,7 @@ const COLLECTOR_DEADLINE_MS = 25_000;
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 type Depth = { buy: [number, number][]; sell: [number, number][] };
 type Ticker = { last: number; buy: number; sell: number; high: number; low: number; volume: number; sourceTime: number };
-type Signal = { type: "BUY" | "SELL" | "HOLD" | "WAIT"; confidence: number; entryLow: number; entryHigh: number; stopLoss: number; takeProfit: number; riskReward: number; reasons: string[]; quality: "validated" | "stale" | "insufficient"; trend: "Bullish" | "Bearish" | "Neutral"; metrics: { rsi: number; atr: number; ema20: number; ema50: number; macd: number; volumeRatio: number; spread: number } };
-import { closedCandles, historyIssue } from "../_shared/candle-history.ts";
+import { closedCandles } from "../_shared/candle-history.ts";
 
 const baseUrl = Deno.env.get("SUPABASE_URL")!;
 const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}")?.default;
@@ -84,69 +84,6 @@ function atr(candles: Candle[], period = 14) {
   const tr = candles.slice(1).map((x, i) => Math.max(x.high - x.low, Math.abs(x.high - candles[i].close), Math.abs(x.low - candles[i].close)));
   return tr.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
-function liquidity(depth: Depth, ticker: Ticker) {
-  const spread = ticker.last > 0 ? ((ticker.sell - ticker.buy) / ticker.last) * 100 : 100;
-  const bid = depth.buy.slice(0, 10).reduce((s, x) => s + x[0] * x[1], 0);
-  const ask = depth.sell.slice(0, 10).reduce((s, x) => s + x[0] * x[1], 0);
-  return { spread, imbalance: (bid - ask) / (bid + ask || 1) };
-}
-function buildSignal(c15: Candle[], c60: Candle[], c240: Candle[], ticker: Ticker, depth: Depth): Signal {
-  const metrics = { rsi: 50, atr: 0, ema20: 0, ema50: 0, macd: 0, volumeRatio: 0, spread: 0 };
-  const now = Date.now();
-  const historyProblem = historyIssue(c15, "15", 60, now) || historyIssue(c60, "60", 200, now) || historyIssue(c240, "240", 150, now);
-  if (historyProblem) return { type: "WAIT", confidence: 0, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: [historyProblem.reason], quality: historyProblem.quality, trend: "Neutral", metrics };
-  if (!ticker.last || !depth.buy.length || !depth.sell.length) {
-    return { type: "WAIT", confidence: 0, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: ["Data OHLC atau order book belum cukup untuk konfirmasi multi-timeframe."], quality: "insufficient", trend: "Neutral", metrics };
-  }
-  const v15 = c15.map(x => x.close), v60 = c60.map(x => x.close), v240 = c240.map(x => x.close);
-  const e20 = ema(v15, 20), e50 = ema(v15, 50), e60 = ema(v60, 50), e240 = ema(v240, 50);
-  const valueRsi = rsi(v15), valueAtr = atr(c15), macd = ema(v15, 12) - ema(v15, 26);
-  const priorVolume = c15.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / 20 || 1;
-  const volumeRatio = c15.at(-1)!.volume / priorVolume;
-  const book = liquidity(depth, ticker);
-  const bull = e60 > ema(v60, 200) && e240 > ema(v240, 150);
-  const bear = e60 < ema(v60, 200) && e240 < ema(v240, 150);
-  let score = 50;
-  const reasons: string[] = [];
-  if (bull) { score += 16; reasons.push("Tren 1H/4H mendukung bullish."); }
-  else if (bear) { score -= 16; reasons.push("Tren 1H/4H cenderung bearish."); }
-  else reasons.push("Tren antar-timeframe belum selaras.");
-  if (e20 > e50) { score += 12; reasons.push("EMA 20 di atas EMA 50 pada 15M."); }
-  else { score -= 12; reasons.push("EMA 20 di bawah EMA 50 pada 15M."); }
-  if (valueRsi >= 52 && valueRsi <= 70) { score += 10; reasons.push(`RSI ${valueRsi.toFixed(1)} menunjukkan momentum sehat.`); }
-  else if (valueRsi > 78) { score -= 6; reasons.push(`RSI ${valueRsi.toFixed(1)} terlalu panas; hindari mengejar harga.`); }
-  else if (valueRsi < 35) { score += 3; reasons.push(`RSI ${valueRsi.toFixed(1)} oversold; perlu konfirmasi.`); }
-  if (macd > 0) { score += 6; reasons.push("MACD berada di wilayah positif."); }
-  else { score -= 6; reasons.push("MACD berada di wilayah negatif."); }
-  if (volumeRatio >= 1.15) { score += 5; reasons.push("Volume candle terakhir meningkat."); }
-  if (book.spread <= 0.5) { score += 4; reasons.push(`Spread ${book.spread.toFixed(2)}% masih likuid.`); }
-  else { score -= 10; reasons.push(`Spread ${book.spread.toFixed(2)}% terlalu lebar.`); }
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  let type: Signal["type"] = "HOLD";
-  if (score >= 68 && bull && book.spread <= 0.8) type = "BUY";
-  else if (score <= 35 && bear && book.spread <= 0.8) type = "SELL";
-  const trend = bull ? "Bullish" : bear ? "Bearish" : "Neutral";
-  const metrics = { rsi: valueRsi, atr: valueAtr, ema20: e20, ema50: e50, macd, volumeRatio, spread: book.spread };
-  if (type === "HOLD") return { type, confidence: score, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons, quality: "validated", trend, metrics };
-  const risk = Math.max(valueAtr * 1.8, ticker.last * 0.008);
-  if (!Number.isFinite(valueAtr) || valueAtr <= 0 || !Number.isFinite(risk) || risk >= ticker.last * 0.95) {
-    return { type: "HOLD", confidence: score, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: [...reasons, "Volatilitas terlalu tinggi untuk menetapkan stop-loss yang valid; tunggu kondisi normal."], quality: "validated", trend, metrics };
-  }
-  const sell = type === "SELL";
-  const stopLoss = sell ? ticker.last + risk : ticker.last - risk;
-  const takeProfit = sell ? ticker.last - risk * 2.1 : ticker.last + risk * 2.1;
-  if (!Number.isFinite(stopLoss) || !Number.isFinite(takeProfit) || stopLoss <= 0 || takeProfit <= 0) {
-    return { type: "HOLD", confidence: score, entryLow: 0, entryHigh: 0, stopLoss: 0, takeProfit: 0, riskReward: 0, reasons: [...reasons, "Level risiko tidak valid pada harga ini; setup dibatalkan."], quality: "validated", trend, metrics };
-  }
-  return {
-    type, confidence: score,
-    entryLow: sell ? Math.max(0, ticker.last - valueAtr * 0.1) : Math.max(0, ticker.last - valueAtr * 0.35), entryHigh: sell ? ticker.last + valueAtr * 0.35 : ticker.last + valueAtr * 0.1,
-    stopLoss, takeProfit,
-    riskReward: 2.1, reasons, quality: "validated", trend: bull ? "Bullish" : bear ? "Bearish" : "Neutral",
-    metrics,
-  };
-}
-
 async function authenticate(req: Request, deadlineAt?: number) {
   const provided = req.headers.get("x-collector-secret") || "";
   if (!provided) return false;
@@ -237,7 +174,7 @@ async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
         if (latest) indicatorRows.push({ market_id: market.id, timeframe, candle_time: new Date(latest.time).toISOString(), ema_20: ema(closes, 20), ema_50: ema(closes, 50), ema_200: ema(closes, 200), rsi: rsi(closes), macd: ema(closes, 12) - ema(closes, 26), macd_signal: ema(closes.map((_, i) => { const prefix = closes.slice(0, i + 1); return ema(prefix, 12) - ema(prefix, 26); }), 9), atr: atr(closed), volume_ratio: latest.volume / (closed.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / Math.max(1, Math.min(20, closed.length - 1)) || 1) });
       }
       const bucket = Math.floor(now / (15 * 60_000));
-      signalRows.push({ market_id: market.id, signal_type: result.type, timeframe: "15m/1h/4h", confidence: result.confidence, reference_price: ticker.last, entry_low: result.entryLow || null, entry_high: result.entryHigh || null, stop_loss: result.stopLoss || null, take_profit: result.takeProfit || null, risk_reward: result.riskReward || null, reason_codes: result.reasons.map((_, i) => `R${i + 1}`), reason_text: result.reasons.join(" "), data_quality: result.quality, expires_at: new Date(now + 15 * 60_000).toISOString(), status: result.type === "WAIT" || result.type === "HOLD" ? "informational" : "active", dedupe_key: `${market.id}:15m:${result.type}:${bucket}` });
+      signalRows.push({ market_id: market.id, signal_type: result.type, timeframe: "15m/1h/4h", confidence: result.score, reference_price: ticker.last, entry_low: result.entryLow || null, entry_high: result.entryHigh || null, stop_loss: result.stopLoss || null, take_profit: result.takeProfit || null, risk_reward: result.riskReward || null, reason_codes: result.reasons.map((_, i) => `R${i + 1}`), reason_text: result.reasons.join(" "), data_quality: result.quality, expires_at: new Date(now + 15 * 60_000).toISOString(), status: result.type === "WAIT" || result.type === "HOLD" ? "informational" : "active", dedupe_key: `${market.id}:15m:${result.type}:${bucket}` });
     }
     if (!(await deadlineDb("rpc/heartbeat_collector_run", { method: "POST", body: JSON.stringify({ p_run_id: lease.run_id, p_fencing_token: lease.fencing_token, p_lease_seconds: 90 }) }))) {
       throw new Error("collector lease lost before persistence");

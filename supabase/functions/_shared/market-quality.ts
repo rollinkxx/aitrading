@@ -10,7 +10,14 @@ export type MarketTicker = {
 export type MarketDepth = {
   buy: [number, number][];
   sell: [number, number][];
-};
+}
+
+export function normalizeSourceTimestamp(value: unknown): number | null {
+  const raw = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const milliseconds = raw < 1_000_000_000_000 ? raw * 1000 : raw;
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : null;
+}
 
 export function validTicker(ticker: MarketTicker): boolean {
   const prices = [ticker.last, ticker.buy, ticker.sell, ticker.high, ticker.low];

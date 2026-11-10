@@ -131,3 +131,23 @@ test('extreme ATR fails closed instead of creating a non-positive BUY stop', () 
   assert.equal(signal.takeProfit, 0)
   assert.match(signal.reasons.at(-1), /stop-loss yang valid/)
 })
+
+
+test('frontend signal engine rejects crossed and unsorted order books', () => {
+  const frames = history('up')
+  const crossed = { buy: [[102, 20], [101, 20]], sell: [[101, 20], [102, 20]] }
+  const unsorted = { buy: [[99, 20], [100, 20]], sell: depth.sell }
+  for (const invalidDepth of [crossed, unsorted]) {
+    const signal = buildSignal(frames.c15, frames.c60, frames.c240, ticker(319), invalidDepth)
+    assert.equal(signal.type, 'WAIT')
+    assert.equal(signal.quality, 'insufficient')
+  }
+})
+
+test('zero prior candle volume is treated as unavailable, not as an artificial ratio', () => {
+  const frames = history('up')
+  frames.c15 = frames.c15.map((candle, index) => ({ ...candle, volume: index === frames.c15.length - 1 ? 200 : 0 }))
+  const signal = buildSignal(frames.c15, frames.c60, frames.c240, ticker(319), depth)
+  assert.equal(signal.metrics.volumeRatio, 0)
+  assert.equal(signal.reasons.some(reason => reason.includes('Volume candle terakhir meningkat')), false)
+})
