@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js@2.119.0/edge-runtime.d.ts";
 import { capRows, fetchAllPages } from "../_shared/pagination.ts";
 import { normalizeDepth, validDepth, validTicker } from "../_shared/market-quality.ts";
 import { buildSignal, type Signal } from "../_shared/strategy.ts";
+import { selectSignalMarkets } from "../_shared/market-discovery.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -11,7 +12,6 @@ const cors = {
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: cors });
 const RUN_WINDOW_MS = 5 * 60_000;
-const MAX_SIGNAL_MARKETS = 8;
 const SNAPSHOT_SIGNALS_LIMIT = 500;
 const CANDLE_HISTORY = 220;
 const CANDLE_RETENTION = 80;
@@ -167,12 +167,16 @@ async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
       tickRows.push({ market_id: market.id, last_price: last, best_bid: buy, best_ask: sell, volume_24h: volume, high_24h: high, low_24h: low, source_timestamp: new Date(sourceMs).toISOString(), data_status: age <= 120_000 ? "validated" : "stale" });
     }
     ticksCount = tickRows.length;
-    const topMarkets = marketRows.filter((m: any) => {
-      const raw = byId.get(m.id);
-      const sourceMs = Number(raw?.server_time) * 1000;
-      const age = now - sourceMs;
-      return m.status === "active" && !!raw && sourceMs > 0 && age >= -60_000 && age <= 120_000;
-    }).sort((a: any, b: any) => (Number(byId.get(b.id)?.vol_idr || 0) - Number(byId.get(a.id)?.vol_idr || 0))).slice(0, MAX_SIGNAL_MARKETS);
+    const discoveryTickers = new Map(tickRows.map((row: any) => [row.market_id, {
+      last: row.last_price,
+      buy: row.best_bid,
+      sell: row.best_ask,
+      high: row.high_24h,
+      low: row.low_24h,
+      volume: row.volume_24h ?? 0,
+      sourceTime: Date.parse(row.source_timestamp),
+    }]));
+    const topMarkets = selectSignalMarkets(marketRows, discoveryTickers, now).map(({ ticker: _ticker, ...market }) => market);
     const signalRows: any[] = [];
     const indicatorRows: any[] = [];
     const candleRows: any[] = [];
