@@ -125,10 +125,21 @@ export function buildSignal(c15:Candle[],c60:Candle[],c240:Candle[],ticker:Ticke
   if(book.spread<=0.5){score+=4;reasons.push(`Spread ${book.spread.toFixed(2)}% masih likuid.`)}
   else{score-=10;reasons.push(`Spread ${book.spread.toFixed(2)}% terlalu lebar.`)}
   score=Math.max(0,Math.min(100,Math.round(score)))
-  const risk=Math.max(valueAtr*1.8,ticker.last*0.008)
   let type:'BUY'|'SELL'|'HOLD'='HOLD'
   if(score>=68&&bull&&book.spread<=0.8)type='BUY'
   else if(score<=35&&bear&&book.spread<=0.8)type='SELL'
+  const trend=bull?'Bullish':bear?'Bearish':'Neutral'
+  const metrics={rsi:valueRsi,atr:valueAtr,ema20:e20,ema50:e50,macd:valueMacd,volumeRatio,spread:book.spread}
+  if(type==='HOLD')return{type,confidence:score,entryLow:0,entryHigh:0,stopLoss:0,takeProfit:0,riskReward:0,reasons,quality:'validated',trend,metrics}
+  const risk=Math.max(valueAtr*1.8,ticker.last*0.008)
+  if(!Number.isFinite(valueAtr)||valueAtr<=0||!Number.isFinite(risk)||risk>=ticker.last*0.95){
+    return{type:'HOLD',confidence:score,entryLow:0,entryHigh:0,stopLoss:0,takeProfit:0,riskReward:0,reasons:[...reasons,'Volatilitas terlalu tinggi untuk menetapkan stop-loss yang valid; tunggu kondisi normal.'],quality:'validated',trend,metrics}
+  }
   const isSell=type==='SELL'
-  return{type,confidence:score,entryLow:Math.max(0,ticker.last-valueAtr*0.35),entryHigh:ticker.last+valueAtr*0.1,stopLoss:isSell?ticker.last+risk:ticker.last-risk,takeProfit:isSell?ticker.last-risk*2.1:ticker.last+risk*2.1,riskReward:2.1,reasons,quality:'validated',trend:bull?'Bullish':bear?'Bearish':'Neutral',metrics:{rsi:valueRsi,atr:valueAtr,ema20:e20,ema50:e50,macd:valueMacd,volumeRatio,spread:book.spread}}
+  const stopLoss=isSell?ticker.last+risk:ticker.last-risk
+  const takeProfit=isSell?ticker.last-risk*2.1:ticker.last+risk*2.1
+  if(!Number.isFinite(stopLoss)||!Number.isFinite(takeProfit)||stopLoss<=0||takeProfit<=0){
+    return{type:'HOLD',confidence:score,entryLow:0,entryHigh:0,stopLoss:0,takeProfit:0,riskReward:0,reasons:[...reasons,'Level risiko tidak valid pada harga ini; setup dibatalkan.'],quality:'validated',trend,metrics}
+  }
+  return{type,confidence:score,entryLow:isSell?Math.max(0,ticker.last-valueAtr*0.1):Math.max(0,ticker.last-valueAtr*0.35),entryHigh:isSell?ticker.last+valueAtr*0.35:ticker.last+valueAtr*0.1,stopLoss,takeProfit,riskReward:2.1,reasons,quality:'validated',trend,metrics}
 }

@@ -106,4 +106,28 @@ test('bearish SELL has stop above and target below reference price', () => {
   assert.equal(signal.type, 'SELL')
   assert.ok(signal.stopLoss > 101)
   assert.ok(signal.takeProfit < 101)
+  assert.ok(signal.entryHigh - 101 > 101 - signal.entryLow)
+})
+
+test('HOLD has no actionable risk levels', () => {
+  const frames = history('up')
+  const signal = buildSignal(frames.c15, frames.c60, frames.c240, {
+    ...ticker(319), buy: 318, sell: 322,
+  }, depth)
+  assert.equal(signal.type, 'HOLD')
+  assert.equal(signal.entryLow, 0)
+  assert.equal(signal.entryHigh, 0)
+  assert.equal(signal.stopLoss, 0)
+  assert.equal(signal.takeProfit, 0)
+  assert.equal(signal.riskReward, 0)
+})
+
+test('extreme ATR fails closed instead of creating a non-positive BUY stop', () => {
+  const frames = history('up')
+  frames.c15 = frames.c15.map(candle => ({ ...candle, high: candle.high + 500, low: Math.max(1, candle.low - 500) }))
+  const signal = buildSignal(frames.c15, frames.c60, frames.c240, ticker(319), depth)
+  assert.equal(signal.type, 'HOLD')
+  assert.equal(signal.stopLoss, 0)
+  assert.equal(signal.takeProfit, 0)
+  assert.match(signal.reasons.at(-1), /stop-loss yang valid/)
 })
