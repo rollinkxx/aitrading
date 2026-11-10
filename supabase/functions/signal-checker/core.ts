@@ -2,6 +2,7 @@ export type Signal = {
   id: string;
   market_id: string;
   signal_type: "BUY" | "SELL" | "HOLD" | "WAIT";
+  expires_at?: string | null;
   reference_price: number | string | null;
   stop_loss: number | string | null;
   take_profit: number | string | null;
@@ -39,6 +40,10 @@ export function freshPrice(ticker: SummaryTicker | null | undefined, nowMs: numb
 
 export function evaluateOutcome(signal: Signal, ticker: SummaryTicker | null | undefined, nowMs: number): Outcome | null {
   if (signal.signal_type !== "BUY" && signal.signal_type !== "SELL") return null;
+  if (signal.expires_at != null) {
+    const expiresAt = Date.parse(signal.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) return null;
+  }
   const price = freshPrice(ticker, nowMs);
   const reference = Number(signal.reference_price);
   const stop = Number(signal.stop_loss);

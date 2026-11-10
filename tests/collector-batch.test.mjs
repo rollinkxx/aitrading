@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import ts from 'typescript';
 
 const migration = fs.readFileSync('supabase/migrations/20261109070000_atomic_collector_batch.sql', 'utf8');
 const collector = fs.readFileSync('supabase/functions/market-collector/index.ts', 'utf8');
@@ -31,6 +32,18 @@ test('batch includes all business layers and outcomes in one request', () => {
 test('collector applies strict market-data validation before signal generation', () => {
   assert.match(collector, /normalizeDepth, validDepth, validTicker/);
   assert.match(collector, /if \(!depth \|\| !validDepth\(depth\) \|\| !validTicker\(ticker\)\) continue/);
-  assert.match(collector, /x\.time <= now \+ 60_000/);
-  assert.match(collector, /toCandles\(raw15, "15", now\)/);
+  assert.match(collector, /function isValidCandle\(candle: Candle, now: number\)/);
+  assert.match(collector, /time <= now \+ 60_000/);
+  assert.match(collector, /rangeIsConsistent = low <= Math\.min\(open, close\) && high >= Math\.max\(open, close\)/);
+  assert.match(collector, /toCandles\(raw15, now\)/);
+});
+
+test('collector source is accepted by the TypeScript parser used for deployment validation', () => {
+  const result = ts.transpileModule(collector, {
+    fileName: 'supabase/functions/market-collector/index.ts',
+    reportDiagnostics: true,
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  });
+  const errors = (result.diagnostics || []).filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
+  assert.deepEqual(errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')), []);
 });

@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js@2.119.0/edge-runtime.d.ts";
-import { fetchAllPages } from "../_shared/pagination.ts";
+import { capRows, fetchAllPages } from "../_shared/pagination.ts";
 import { normalizeDepth, validDepth, validTicker } from "../_shared/market-quality.ts";
 import { buildSignal, type Signal } from "../_shared/strategy.ts";
 
@@ -12,6 +12,7 @@ const cors = {
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: cors });
 const RUN_WINDOW_MS = 5 * 60_000;
 const MAX_SIGNAL_MARKETS = 8;
+const SNAPSHOT_SIGNALS_LIMIT = 500;
 const CANDLE_HISTORY = 220;
 const CANDLE_RETENTION = 80;
 // Leave headroom for persistence and the 30-second pg_net timeout.
@@ -94,18 +95,45 @@ async function latestSnapshot() {
   const [markets, ticks, signals, runs] = await Promise.all([
     fetchAllPages((offset, limit) => db(`markets?select=id,symbol,base_asset,quote_asset,status,last_synced_at&order=symbol.asc&limit=${limit}&offset=${offset}`)),
     fetchAllPages((offset, limit) => db(`latest_market_ticks?select=market_id,last_price,best_bid,best_ask,volume_24h,high_24h,low_24h,source_timestamp,received_at,data_status&order=market_id.asc&limit=${limit}&offset=${offset}`)),
-    db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&status=in.(active,informational)&order=created_at.desc&limit=500`),
+    db(`signals?select=id,market_id,signal_type,timeframe,confidence,reference_price,entry_low,entry_high,stop_loss,take_profit,risk_reward,reason_text,data_quality,created_at,expires_at,status&status=in.(active,informational)&order=created_at.desc,id.desc&limit=${SNAPSHOT_SIGNALS_LIMIT + 1}`),
     db("collector_runs?select=started_at,finished_at,status,markets_count,ticks_count,candles_count,signals_count,outcomes_count&order=started_at.desc&limit=1"),
   ]);
-  return { markets, ticks, signals, latestRun: runs?.[0] || null, servedAt: new Date().toISOString() };
+  const { rows: visibleSignals, hasMore } = capRows(signals, SNAPSHOT_SIGNALS_LIMIT);
+  return {
+    markets, ticks, signals: visibleSignals, signalsLimit: SNAPSHOT_SIGNALS_LIMIT,
+    signalsTruncated: hasMore, hasMore,
+    latestRun: runs?.[0] || null, servedAt: new Date().toISOString(),
+  };
 }
 
-function toCandles(raw: any, tf: string, now: number): Candle[] {
-  const candles = Array.isArray(raw) ? raw.map((x: any) => ({
-    time: Number(x.Time) * 1000, open: Number(x.Open), high: Number(x.High), low: Number(x.Low), close: Number(x.Close), volume: Number(x.Volume || 0),
-  })) : [];
-  return candles.filter((x: Candle) => Number.isFinite(x.time) && x.time > 0 && x.time <= now + 60_000 && [x.open, x.high, x.low, x.close, x.volume].every(Number.isFinite) && x.open > 0 && x.high > 0 && x.low > 0 && x.close > 0 && x.volume >= 0 && x.low <= Math.min(x.open, x.close) && x.high >= Math.max(x.open, x.close)).sort((a: Candle, b: Candle) => a.time - b.time).slice(-CANDLE_HISTORY);
+function isValidCandle(candle: Candle, now: number): boolean {
+  const { time, open, high, low, close, volume } = candle;
+  const pricesAreFinite = [open, high, low, close, volume].every(Number.isFinite);
+  const pricesArePositive = open > 0 && high > 0 && low > 0 && close > 0;
+  const rangeIsConsistent = low <= Math.min(open, close) && high >= Math.max(open, close);
+  return Number.isFinite(time) && time > 0 && time <= now + 60_000
+    && pricesAreFinite && pricesArePositive && volume >= 0 && rangeIsConsistent;
 }
+
+function toCandles(raw: unknown, now: number): Candle[] {
+  const rows = Array.isArray(raw) ? raw : [];
+  const candles: Candle[] = [];
+  for (const value of rows) {
+    if (!value || typeof value !== "object") continue;
+    const item = value as Record<string, unknown>;
+    const candle: Candle = {
+      time: Number(item.Time) * 1000,
+      open: Number(item.Open),
+      high: Number(item.High),
+      low: Number(item.Low),
+      close: Number(item.Close),
+      volume: Number(item.Volume ?? 0),
+    };
+    if (isValidCandle(candle, now)) candles.push(candle);
+  }
+  return candles.sort((left, right) => left.time - right.time).slice(-CANDLE_HISTORY);
+}
+
 async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
   const now = Date.now();
   const runKey = String(Math.floor(now / RUN_WINDOW_MS));
@@ -159,7 +187,7 @@ async function collect(deadlineAt = Date.now() + COLLECTOR_DEADLINE_MS) {
       ]);
       const depth = normalizeDepth(depthRaw, 30);
       if (!depth || !validDepth(depth) || !validTicker(ticker)) continue;
-      const c15 = toCandles(raw15, "15", now), c60 = toCandles(raw60, "60", now), c240 = toCandles(raw240, "240", now);
+      const c15 = toCandles(raw15, now), c60 = toCandles(raw60, now), c240 = toCandles(raw240, now);
       const closed15 = closedCandles(c15, "15", now), closed60 = closedCandles(c60, "60", now), closed240 = closedCandles(c240, "240", now);
       const result = buildSignal(closed15, closed60, closed240, ticker, depth);
       for (const [timeframe, bars] of [["15", c15], ["60", c60], ["240", c240]] as [string, Candle[]][]) {
