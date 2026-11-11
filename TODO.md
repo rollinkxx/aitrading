@@ -18,7 +18,13 @@
 - [x] Hardened local storage fallback/validation, directory response ordering, market-data timeout/retry/depth validation, proxy streaming byte limit, heuristic-score wording, and neutral RSI for flat prices.
 - [x] Regression suite now passes 39/39; typecheck, production build, Wrangler dry-run, local browser navigation/search smoke test, and npm audits pass.
 - [x] Add atomic retry/reclaim for failed or stale collector runs with a database lease, heartbeat timestamp, fencing token, guarded completion, and concurrent-claim regression coverage.
-- [ ] Add migration replay against a clean PostgreSQL database and integration coverage for collector auth, failures, and browser refresh races. The sandbox has no PostgreSQL/Docker/Supabase CLI; production DDL and live auth/cron smoke checks are verified, but a disposable clean database replay remains open.
+- [x] Add migration replay against a clean disposable PostgreSQL database and integration coverage for collector auth, failures, and browser refresh races; the release gate replays all standard migrations locally with fenced-lease assertions.
 - [x] Replace hardcoded Supabase function URLs in portable cron setup; migration fails closed without a runtime URL/Vault value and production has exactly one active job per name.
 - [x] Add bounded snapshot pagination before market/signal count approaches the previous 1,000/500-row limits; the endpoint now fails closed above its configured maximum instead of silently truncating.
 - [x] Keep outcome reporting explicitly labeled as `snapshot_sampled`; candle-range evaluation and out-of-sample calibration remain intentionally open before any probability/accuracy claims.
+
+- [x] Add isolated shared-balance paper auto-trading schema, private win/loss ledger, public status/history RPCs, unauthenticated global controls with audit trail, and service-role-only atomic tick RPCs in the separate `aitrading-paper` Supabase project; no live orders or credentials.
+- [x] Deploy the paper-only Edge Function with official public Indodax ticker/depth/OHLC data, CFX modeled at 0.00555% per side, bounded quotes, stop/take-profit monitoring, daily 2% loss guard, 10% position cap, and a lease/fencing token.
+- [x] Schedule `paper-engine` every minute through a Vault-backed secret on the separate paper database; keep paper migrations/functions outside default production Supabase directories.
+- [x] Add frontend paper status, shared portfolio, open positions, full-history win/loss/breakeven aggregate, latest 50 trade cards, and pair/pause/resume/stop controls; deploy the verified UI bundle to the production Worker.
+- [x] Verify scheduled paper ticks, successful HTTP 200 responses, rendered Preview smoke marker, anonymous public-safe stats/history reads, and no trade before an eligible fresh BUY arrives.

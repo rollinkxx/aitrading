@@ -1,6 +1,6 @@
 # AITrading
 
-Mobile-first Indodax signal engine using official public market data. This release is **signal-only**: it does not connect to private account APIs and never submits orders.
+Mobile-first Indodax signal engine using official public market data, plus an isolated paper-trading simulator. The application never connects to private account APIs and never submits live orders.
 
 ## Run
 
@@ -11,7 +11,18 @@ cp .env.example .env
 npm run dev
 ```
 
-If Supabase variables are not configured, the dashboard still runs with live Indodax data and local watchlist persistence.
+If Supabase variables are not configured, the dashboard still runs with live Indodax data and local watchlist persistence. Paper status/history requires the separate paper-project variables below.
+
+## Paper trading
+
+The shared paper portfolio starts at Rp100.000.000 and runs in the isolated `aitrading-paper` Supabase project. It accepts only fresh, validated BUY entries, models CFX at 0,00555% per side, limits each position to 10% of equity, and blocks new entries after a 2% daily drawdown while continuing to manage exits. Closed trades are classified as MENANG, KALAH, or IMPAS from net realized P&L; open positions are not counted in history.
+
+The Dashboard shows equity and open positions, Signals shows the win/loss ledger, and Settings exposes the intentionally unauthenticated shared pair/pause/resume/stop controls. These controls affect only the paper portfolio and are recorded in its audit log. Add these browser-safe values to `.env` when running the paper UI locally:
+
+```bash
+VITE_PAPER_SUPABASE_URL=https://your-paper-project.supabase.co
+VITE_PAPER_SUPABASE_ANON_KEY=your-paper-publishable-key
+```
 
 ## Background collector
 
@@ -32,7 +43,7 @@ For a new environment, set `supabase_url` and a high-entropy `collector_shared_s
 
 ## Safety
 
-Signals are analytical outputs, not financial advice or profit guarantees. The engine returns WAIT when data is stale, incomplete, or liquidity checks fail. Auto-trading is intentionally not implemented.
+Signals are analytical outputs, not financial advice or profit guarantees. The engine returns WAIT when data is stale, incomplete, or liquidity checks fail. Auto-trading is paper-only: no exchange credentials, private endpoints, or live order path exists.
 
 ## Verification
 

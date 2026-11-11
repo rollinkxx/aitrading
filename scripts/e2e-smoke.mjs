@@ -20,7 +20,7 @@ try {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || 'Chromium failed');
   const dom = result.stdout;
-  for (const marker of ['AITrading', 'INDODAX SIGNAL ENGINE', 'Data resmi']) {
+  for (const marker of ['AITrading', 'INDODAX SIGNAL ENGINE', 'Data resmi', 'Auto-trading simulasi']) {
     if (!dom.includes(marker)) throw new Error(`missing rendered marker: ${marker}`);
   }
   if (/Uncaught (?:Error|TypeError)|Failed to load resource: the server responded with a status of 5/.test(dom)) throw new Error('fatal browser error rendered');
